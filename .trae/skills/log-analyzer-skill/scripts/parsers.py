@@ -6,6 +6,7 @@ Zero external dependencies.
 
 import json
 import re
+import sys
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple, Iterator
 
@@ -282,7 +283,18 @@ def parse_excel_file(file_path: str) -> Iterator[Dict[str, Any]]:
     try:
         import openpyxl
     except ImportError:
-        raise ImportError("openpyxl is required for Excel parsing. Install with: pip install openpyxl")
+        print(f"⚠️ 缺少 openpyxl 库，无法解析 Excel 文件。请安装: pip install openpyxl", file=sys.stderr)
+        print(f"   已自动降级为文本模式解析...", file=sys.stderr)
+        # Fallback: try to parse as binary/text file
+        with open(file_path, 'rb') as f:
+            content = f.read().decode('utf-8', errors='ignore')
+            for line_no, line in enumerate(content.split('\n'), 1):
+                if line.strip():
+                    record = parse_line(line)
+                    if record:
+                        record["_format"] = "excel_fallback"
+                        yield record
+        return
 
     wb = openpyxl.load_workbook(file_path, read_only=True)
     for sheet_name in wb.sheetnames:
@@ -337,7 +349,18 @@ def parse_pdf_file(file_path: str) -> Iterator[Dict[str, Any]]:
     try:
         import PyPDF2
     except ImportError:
-        raise ImportError("PyPDF2 is required for PDF parsing. Install with: pip install PyPDF2")
+        print(f"⚠️ 缺少 PyPDF2 库，无法解析 PDF 文件。请安装: pip install PyPDF2", file=sys.stderr)
+        print(f"   已自动降级为文本模式解析...", file=sys.stderr)
+        # Fallback: try to parse as binary/text file
+        with open(file_path, 'rb') as f:
+            content = f.read().decode('utf-8', errors='ignore')
+            for line_no, line in enumerate(content.split('\n'), 1):
+                if line.strip():
+                    record = parse_line(line)
+                    if record:
+                        record["_format"] = "pdf_fallback"
+                        yield record
+        return
 
     with open(file_path, 'rb') as f:
         reader = PyPDF2.PdfReader(f)

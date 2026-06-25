@@ -264,6 +264,42 @@ def find_log_files(path: str) -> list:
     return sorted(files)
 
 
+def check_dependencies() -> Dict[str, bool]:
+    """Check availability of optional dependencies and return status."""
+    deps = {
+        "openpyxl": False,
+        "PyPDF2": False,
+        "python-docx": False,
+        "weasyprint": False,
+    }
+
+    try:
+        import openpyxl
+        deps["openpyxl"] = True
+    except ImportError:
+        pass
+
+    try:
+        import PyPDF2
+        deps["PyPDF2"] = True
+    except ImportError:
+        pass
+
+    try:
+        import docx
+        deps["python-docx"] = True
+    except ImportError:
+        pass
+
+    try:
+        import weasyprint
+        deps["weasyprint"] = True
+    except ImportError:
+        pass
+
+    return deps
+
+
 def analyze(file_path: str, output_format: str = "markdown",
             output_dir: Optional[str] = None, verbose: bool = False) -> Dict[str, Any]:
     """
@@ -299,29 +335,36 @@ def analyze(file_path: str, output_format: str = "markdown",
     # Extended ext_map for all formats
     ext_map = {"markdown": "md", "json": "json", "html": "html", "word": "docx", "pdf": "pdf"}
 
-    if output_format == "json":
+    # Check dependencies and handle format fallback
+    deps = check_dependencies()
+    actual_format = output_format
+
+    if output_format == "word" and not deps["python-docx"]:
+        print("⚠️ python-docx 未安装，自动降级为 Markdown 格式", file=sys.stderr)
+        actual_format = "markdown"
+    elif output_format == "pdf" and not deps["weasyprint"]:
+        print("⚠️ weasyprint 未安装，自动降级为 HTML 格式", file=sys.stderr)
+        actual_format = "html"
+
+    if actual_format == "json":
         report["_format"] = "json"
         content = generate_json_report(stats, root_cause, file_path, duration, trend, severity)
-    elif output_format == "html":
+    elif actual_format == "html":
         report["_format"] = "html"
         content = generate_html_report(stats, root_cause, file_path, duration, trend, severity)
-    elif output_format == "word":
+    elif actual_format == "word":
         report["_format"] = "word"
         content = generate_word_report(stats, root_cause, file_path, duration, trend, severity)
-        if not content:
-            print("⚠️ Word 报告生成失败：python-docx 库未安装，请运行: pip install python-docx", file=sys.stderr)
-    elif output_format == "pdf":
+    elif actual_format == "pdf":
         report["_format"] = "pdf"
         content = generate_pdf_report(stats, root_cause, file_path, duration, trend, severity)
-        if not content:
-            print("⚠️ PDF 报告生成失败：weasyprint 库未安装，请运行: pip install weasyprint", file=sys.stderr)
     else:
         report["_format"] = "markdown"
         content = generate_markdown(stats, root_cause, file_path, duration, trend, severity)
 
     if output_dir and content:
         basename = os.path.splitext(os.path.basename(file_path))[0]
-        ext = ext_map.get(output_format, "md")
+        ext = ext_map.get(actual_format, "md")
         out_path = os.path.join(output_dir, f"{basename}_report.{ext}")
         os.makedirs(output_dir, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:

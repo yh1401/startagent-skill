@@ -1,11 +1,12 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────────────────────
-# Skill 打包脚本 v2.0 - 一键打包所有 Skill + 自动日期存档 + 详细统计
+# Skill 打包脚本 v3.0 - 一键打包所有 Skill + 增量打包 + 自动日期存档 + 详细统计
 # ──────────────────────────────────────────────────────────────────────
 # 用法:
-#   bash packages/build.sh                   打包所有 skill
+#   bash packages/build.sh                   打包所有 skill（增量模式）
 #   bash packages/build.sh ops-data-query    只打包指定 skill
 #   bash packages/build.sh log-analyzer-skill log-analyzer-flash  打包多个
+#   bash packages/build.sh --force           强制重新打包所有 skill
 #   bash packages/build.sh --help            显示帮助
 #   bash packages/build.sh --list            列出所有可打包的 skill
 # ──────────────────────────────────────────────────────────────────────
@@ -22,7 +23,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # ── 配置参数 ──
-VERSION="2.0"
+VERSION="3.0"
 DATE_TAG=$(date +%Y-%m-%d)
 TIME_TAG=$(date +%H%M%S)
 PACKAGES_DIR="packages"
@@ -49,11 +50,12 @@ show_help() {
   echo "  --list              列出所有可打包的 skill"
   echo "  --clean             清理所有打包产物（保留脚本）"
   echo "  --verbose           显示详细打包过程"
+  echo "  --force             强制重新打包所有 skill（忽略增量检查）"
   echo ""
   echo "示例:"
-  echo "  bash packages/build.sh                   # 打包所有 skill"
+  echo "  bash packages/build.sh                   # 打包所有 skill（增量模式）"
   echo "  bash packages/build.sh ops-data-query    # 只打包指定 skill"
-  echo "  bash packages/build.sh log-analyzer-skill log-analyzer-flash  # 打包多个"
+  echo "  bash packages/build.sh --force           # 强制重新打包所有"
   echo ""
   echo -e "${YELLOW}可打包的 skill 列表:${NC}"
   for skill in "${ALL_SKILLS[@]}"; do
@@ -97,12 +99,33 @@ clean_packages() {
   exit 0
 }
 
+# ── 计算目录哈希值（排除指定文件/目录）──
+calculate_hash() {
+  local skill_dir="$1"
+  local skip_dirs="$2"
+  local skip_files="$3"
+
+  local find_cmd="find \"$skill_dir\" -type f"
+  
+  for dir in ${skip_dirs[@]}; do
+    find_cmd="$find_cmd ! -path \"*/$dir/*\""
+  done
+  
+  for file in ${skip_files[@]}; do
+    find_cmd="$find_cmd ! -name \"$file\""
+  done
+
+  local hash=$(eval "$find_cmd" | sort | xargs md5sum 2>/dev/null | md5sum | awk '{print $1}')
+  echo "$hash"
+}
+
 # ── 主程序 ──
 main() {
   cd "$(dirname "$0")/.." || exit 1
 
   # ── 解析命令行参数 ──
   VERBOSE=false
+  FORCE=false
   SKILLS_TO_BUILD=()
 
   for arg in "$@"; do
@@ -111,6 +134,7 @@ main() {
       --list) list_skills ;;
       --clean) clean_packages ;;
       --verbose) VERBOSE=true ;;
+      --force) FORCE=true ;;
       *) SKILLS_TO_BUILD+=("$arg") ;;
     esac
   done
@@ -123,6 +147,7 @@ main() {
   # ── 初始化统计变量 ──
   SUCCESS_COUNT=0
   SKIP_COUNT=0
+  NO_CHANGE_COUNT=0
   FAIL_COUNT=0
   TOTAL_SIZE=0
 
@@ -140,12 +165,13 @@ main() {
   echo -e "${CYAN}  Skill 打包脚本 v${VERSION}${NC}"
   echo -e "${CYAN}  日期: ${DATE_TAG} ${TIME_TAG}${NC}"
   echo -e "${CYAN}  目标: ${#SKILLS_TO_BUILD[@]} 个 skill${NC}"
+  echo -e "${CYAN}  模式: ${FORCE:+强制打包}${FORCE:-增量打包}"
   echo -e "${PURPLE}==========================================${NC}"
 
   # ── 开始打包 ──
   for skill in "${SKILLS_TO_BUILD[@]}"; do
     echo ""
-    echo -e "${BLUE}▶ 打包: ${skill}${NC}"
+    echo -e "${BLUE}▶ 处理: ${skill}${NC}"
 
     # 检查目录是否存在
     if [ ! -d "$skill" ]; then
@@ -165,7 +191,27 @@ main() {
     SKILL_DIR="$PACKAGES_DIR/$skill"
     ZIP_NAME="${skill}.zip"
     ZIP_PATH="${SKILL_DIR}/${ZIP_NAME}"
+    HASH_FILE="${SKILL_DIR}/.last_hash"
     mkdir -p "$SKILL_DIR"
+
+    # ── 增量检查（非强制模式）──
+    if [ "$FORCE" = false ]; then
+      current_hash=$(calculate_hash "$skill" "${SKIP_DIRS[*]}" "${SKIP_FILES[*]}")
+      
+      if [ -f "$HASH_FILE" ]; then
+        last_hash=$(cat "$HASH_FILE")
+        if [ "$current_hash" = "$last_hash" ]; then
+          SIZE=$(du -h "$ZIP_PATH" 2>/dev/null | cut -f1)
+          echo -e "  ${GREEN}✓ 跳过: 代码无变化${NC}${SIZE:+ (当前包: ${SIZE})}"
+          NO_CHANGE_COUNT=$((NO_CHANGE_COUNT + 1))
+          if [ -f "$ZIP_PATH" ]; then
+            SIZE_BYTES=$(stat -f%z "$ZIP_PATH" 2>/dev/null || stat -c%s "$ZIP_PATH" 2>/dev/null || echo 0)
+            TOTAL_SIZE=$((TOTAL_SIZE + SIZE_BYTES))
+          fi
+          continue
+        fi
+      fi
+    fi
 
     # 归档旧包
     if [ -f "$ZIP_PATH" ]; then
@@ -184,6 +230,10 @@ main() {
 
     # 检查打包结果
     if [ $? -eq 0 ]; then
+      # 更新哈希文件
+      current_hash=$(calculate_hash "$skill" "${SKIP_DIRS[*]}" "${SKIP_FILES[*]}")
+      echo "$current_hash" > "$HASH_FILE"
+
       SIZE=$(du -h "$ZIP_PATH" | cut -f1)
       SIZE_BYTES=$(stat -f%z "$ZIP_PATH" 2>/dev/null || stat -c%s "$ZIP_PATH" 2>/dev/null || echo 0)
       TOTAL_SIZE=$((TOTAL_SIZE + SIZE_BYTES))
@@ -202,6 +252,7 @@ main() {
   echo -e "${PURPLE}==========================================${NC}"
   echo ""
   echo -e "${GREEN}✓ 成功: ${SUCCESS_COUNT}${NC}"
+  echo -e "${BLUE}◎ 无变化: ${NO_CHANGE_COUNT}${NC}"
   echo -e "${YELLOW}⚠ 跳过: ${SKIP_COUNT}${NC}"
   echo -e "${RED}✗ 失败: ${FAIL_COUNT}${NC}"
 
@@ -223,7 +274,7 @@ main() {
   fi
 
   echo ""
-  echo -e "${YELLOW}💡 提示: 使用 --clean 清理旧包，使用 --list 查看所有 skill${NC}"
+  echo -e "${YELLOW}💡 提示: 使用 --clean 清理旧包，使用 --force 强制重新打包${NC}"
 }
 
 # ── 执行主程序 ──

@@ -47,6 +47,7 @@ Thumbs.db
 # Skill packages (保留 build.sh)
 .trae/skills/packages/*.zip
 .trae/skills/packages/**/*.zip
+.trae/skills/packages/*/.last_hash
 
 # Skill reports
 .trae/skills/*/reports/
