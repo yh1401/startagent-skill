@@ -17,7 +17,10 @@ from typing import Dict, Any, List, Optional, Iterator
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.parsers import parse_line, detect_format, parse_json_log, is_stack_trace_line
+from scripts.parsers import (
+    parse_line, detect_format, parse_json_log, is_stack_trace_line,
+    parse_excel_file, parse_csv_file, parse_xml_file, parse_pdf_file, parse_json_file
+)
 from scripts.stats import compute_statistics, compute_trend_analysis, compute_severity_distribution
 from scripts.root_cause import analyze_root_cause
 from scripts.reporters import generate_report
@@ -134,6 +137,33 @@ class LogAnalyzer:
         self.parsed_records = []
         self.format_counts = {}
 
+        # Determine file type and use appropriate parser
+        file_ext = os.path.splitext(file_path)[1].lower()
+
+        try:
+            if file_ext == '.xlsx':
+                self._parse_excel(file_path)
+            elif file_ext == '.csv':
+                self._parse_csv(file_path)
+            elif file_ext == '.xml':
+                self._parse_xml(file_path)
+            elif file_ext == '.pdf':
+                self._parse_pdf(file_path)
+            elif file_ext == '.json':
+                self._parse_json_file(file_path)
+            else:
+                # Default: parse as text log file
+                self._parse_text_log(file_path)
+        except ImportError as e:
+            print(f"缺少必要的库: {e}")
+            print(f"请安装所需依赖: pip install openpyxl PyPDF2")
+            raise
+        except Exception as e:
+            print(f"解析文件失败: {e}")
+            raise
+
+    def _parse_text_log(self, file_path: str) -> None:
+        """Parse standard text log files."""
         current_record: Optional[Dict[str, Any]] = None
         stack_trace: List[str] = []
 
@@ -177,6 +207,81 @@ class LogAnalyzer:
 
         if stack_trace and current_record:
             current_record["stack_trace"] = "\n".join(stack_trace)
+
+    def _parse_excel(self, file_path: str) -> None:
+        """Parse Excel log files."""
+        print("正在解析 Excel 文件...")
+        for line_no, record in enumerate(parse_excel_file(file_path), 1):
+            if self.max_lines and line_no > self.max_lines:
+                break
+
+            self.total_lines_processed += 1
+            if line_no % self.chunk_size == 0:
+                print(f"已处理 {line_no} 行...", end="\r")
+
+            record["_line_no"] = line_no
+            self.parsed_records.append(record)
+            self._count_format("excel")
+
+    def _parse_csv(self, file_path: str) -> None:
+        """Parse CSV log files."""
+        print("正在解析 CSV 文件...")
+        for line_no, record in enumerate(parse_csv_file(file_path), 1):
+            if self.max_lines and line_no > self.max_lines:
+                break
+
+            self.total_lines_processed += 1
+            if line_no % self.chunk_size == 0:
+                print(f"已处理 {line_no} 行...", end="\r")
+
+            record["_line_no"] = line_no
+            self.parsed_records.append(record)
+            self._count_format("csv")
+
+    def _parse_xml(self, file_path: str) -> None:
+        """Parse XML log files."""
+        print("正在解析 XML 文件...")
+        for line_no, record in enumerate(parse_xml_file(file_path), 1):
+            if self.max_lines and line_no > self.max_lines:
+                break
+
+            self.total_lines_processed += 1
+            if line_no % self.chunk_size == 0:
+                print(f"已处理 {line_no} 行...", end="\r")
+
+            record["_line_no"] = line_no
+            self.parsed_records.append(record)
+            self._count_format("xml")
+
+    def _parse_pdf(self, file_path: str) -> None:
+        """Parse PDF log files."""
+        print("正在解析 PDF 文件...")
+        for line_no, record in enumerate(parse_pdf_file(file_path), 1):
+            if self.max_lines and line_no > self.max_lines:
+                break
+
+            self.total_lines_processed += 1
+            if line_no % self.chunk_size == 0:
+                print(f"已处理 {line_no} 行...", end="\r")
+
+            record["_line_no"] = line_no
+            self.parsed_records.append(record)
+            self._count_format("pdf")
+
+    def _parse_json_file(self, file_path: str) -> None:
+        """Parse JSON log files."""
+        print("正在解析 JSON 文件...")
+        for line_no, record in enumerate(parse_json_file(file_path), 1):
+            if self.max_lines and line_no > self.max_lines:
+                break
+
+            self.total_lines_processed += 1
+            if line_no % self.chunk_size == 0:
+                print(f"已处理 {line_no} 行...", end="\r")
+
+            record["_line_no"] = line_no
+            self.parsed_records.append(record)
+            self._count_format("json_file")
 
     def _count_format(self, fmt: str) -> None:
         """Count format occurrences."""

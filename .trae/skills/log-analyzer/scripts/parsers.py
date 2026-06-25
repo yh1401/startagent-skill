@@ -236,3 +236,154 @@ def _normalize_json_timestamp(ts: Any) -> Optional[str]:
     except (ValueError, TypeError):
         pass
     return None
+
+
+def parse_excel_file(file_path: str) -> Iterator[Dict[str, Any]]:
+    """Parse Excel (.xlsx) log files."""
+    try:
+        import openpyxl
+    except ImportError:
+        raise ImportError("openpyxl is required for Excel parsing. Install with: pip install openpyxl")
+
+    wb = openpyxl.load_workbook(file_path, read_only=True)
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        headers = None
+        for row in ws.iter_rows(values_only=True):
+            if headers is None:
+                headers = [str(cell) if cell is not None else f"col_{i}" for i, cell in enumerate(row)]
+                continue
+
+            record = {}
+            for i, cell in enumerate(row):
+                if i < len(headers):
+                    record[headers[i]] = cell
+
+            # Convert to log record format
+            yield _convert_to_log_record(record, "excel")
+
+
+def parse_csv_file(file_path: str) -> Iterator[Dict[str, Any]]:
+    """Parse CSV log files."""
+    import csv
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            yield _convert_to_log_record(row, "csv")
+
+
+def parse_xml_file(file_path: str) -> Iterator[Dict[str, Any]]:
+    """Parse XML log files."""
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(file_path)
+    root = tree.getroot()
+
+    # Try to find log entries (common patterns)
+    log_entries = root.findall('.//log') or root.findall('.//entry') or root.findall('.//record') or root.findall('.//event')
+
+    if not log_entries:
+        # If no standard log tags, treat each child element as a log entry
+        log_entries = list(root)
+
+    for entry in log_entries:
+        record = {}
+        for child in entry:
+            record[child.tag] = child.text
+
+        yield _convert_to_log_record(record, "xml")
+
+
+def parse_pdf_file(file_path: str) -> Iterator[Dict[str, Any]]:
+    """Parse PDF log files (extract text and parse as lines)."""
+    try:
+        import PyPDF2
+    except ImportError:
+        raise ImportError("PyPDF2 is required for PDF parsing. Install with: pip install PyPDF2")
+
+    with open(file_path, 'rb') as f:
+        reader = PyPDF2.PdfReader(f)
+        for page in reader.pages:
+            text = page.extract_text()
+            for line in text.split('\n'):
+                if line.strip():
+                    record = parse_line(line)
+                    if record:
+                        record["_format"] = "pdf"
+                        yield record
+
+
+def parse_json_file(file_path: str) -> Iterator[Dict[str, Any]]:
+    """Parse JSON log files (line-delimited JSON or JSON array)."""
+    import json
+
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read().strip()
+
+        # Try to parse as JSON array first
+        try:
+            data = json.loads(content)
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        yield _convert_to_log_record(item, "json_file")
+                return
+        except json.JSONDecodeError:
+            pass
+
+        # Fall back to line-delimited JSON
+        for line in content.split('\n'):
+            if line.strip():
+                record = parse_json_log(line)
+                if record:
+                    yield record
+
+
+def _convert_to_log_record(data: Dict[str, Any], format_type: str) -> Dict[str, Any]:
+    """Convert parsed data to standard log record format."""
+    record: Dict[str, Any] = {
+        "_raw": str(data),
+        "_format": format_type,
+        "_line_no": 0,
+    }
+
+    # Map common field names
+    field_mapping = {
+        'level': ['level', 'severity', 'priority', 'log_level'],
+        'message': ['message', 'msg', 'text', 'description', 'content'],
+        'timestamp': ['timestamp', 'time', 'date', '@timestamp', 'datetime'],
+        'module': ['module', 'logger', 'service', 'source', 'component', 'app'],
+        'error_type': ['error_type', 'exception', 'error', 'exception_type'],
+        'thread': ['thread', 'thread_name', 'threadId'],
+        'trace_id': ['trace_id', 'traceId', 'request_id', 'requestId'],
+    }
+
+    for target_field, source_fields in field_mapping.items():
+        for source_field in source_fields:
+            if source_field in data and data[source_field]:
+                value = data[source_field]
+                if target_field == 'level':
+                    record[target_field] = str(value).upper()
+                elif target_field == 'timestamp':
+                    record['timestamp_raw'] = str(value)
+                    record['timestamp'] = _normalize_json_timestamp(value)
+                else:
+                    record[target_field] = str(value)
+                break
+
+    # If no level found, try to infer from content
+    if 'level' not in record:
+        message = record.get('message', '').upper()
+        for level in ['CRITICAL', 'FATAL', 'ERROR', 'WARN', 'WARNING', 'INFO', 'DEBUG', 'TRACE']:
+            if level in message:
+                record['level'] = level
+                break
+
+    # If still no level, default to INFO
+    if 'level' not in record:
+        record['level'] = 'INFO'
+
+    # Ensure message field exists
+    if 'message' not in record:
+        record['message'] = str(data)
+
+    return record

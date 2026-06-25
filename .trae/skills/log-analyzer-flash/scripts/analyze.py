@@ -17,14 +17,16 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 
 try:
-    from parsers import parse_line, detect_format
+    from parsers import parse_line, detect_format, parse_json_log, is_stack_trace_line
+    from parsers import parse_excel_file, parse_csv_file, parse_xml_file, parse_pdf_file, parse_json_file
     from stats import compute_statistics
     from root_cause import infer_root_causes
     from reporters import generate_markdown, generate_json_report, generate_html_report
 except ImportError:
     # When running from scripts/ directory
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from parsers import parse_line, detect_format
+    from parsers import parse_line, detect_format, parse_json_log, is_stack_trace_line
+    from parsers import parse_excel_file, parse_csv_file, parse_xml_file, parse_pdf_file, parse_json_file
     from stats import compute_statistics
     from root_cause import infer_root_causes
     from reporters import generate_markdown, generate_json_report, generate_html_report
@@ -44,63 +46,137 @@ def stream_parse(file_path: str, verbose: bool = False) -> list:
     use_stream = file_size > STREAM_THRESHOLD
 
     if verbose:
-        print(f"📄 文件大小: {_fmt_size(file_size)}", file=sys.stderr)
+        print(f"📄 文件: {file_path} ({_fmt_size(file_size)})", file=sys.stderr)
         print(f"🚰 流式模式: {'启用' if use_stream else '关闭(全量加载)'}", file=sys.stderr)
 
     records = []
     line_no = 0
     start = time.time()
 
-    if use_stream:
-        # Streaming mode: process chunk by chunk
-        with open(file_path, "r", errors="replace") as f:
-            buffer = ""
-            while True:
-                chunk = f.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                buffer += chunk
-                lines = buffer.split("\n")
-                buffer = lines.pop()  # Keep incomplete last line in buffer
+    # Determine file type and use appropriate parser
+    file_ext = os.path.splitext(file_path)[1].lower()
 
-                for line in lines:
-                    if not line.strip():
-                        line_no += 1
-                        continue
+    try:
+        if file_ext == '.xlsx':
+            # Excel file parsing
+            if verbose:
+                print(f"📊 解析 Excel 文件...", file=sys.stderr)
+            for line_no, rec in enumerate(parse_excel_file(file_path), 1):
+                if rec:
+                    rec["_line_no"] = line_no
+                    records.append(rec)
+                if verbose and line_no % 10000 == 0:
+                    elapsed = time.time() - start
+                    print(f"  已处理 {line_no:,} 行 ({elapsed:.1f}s)", file=sys.stderr)
+
+        elif file_ext == '.csv':
+            # CSV file parsing
+            if verbose:
+                print(f"📊 解析 CSV 文件...", file=sys.stderr)
+            for line_no, rec in enumerate(parse_csv_file(file_path), 1):
+                if rec:
+                    rec["_line_no"] = line_no
+                    records.append(rec)
+                if verbose and line_no % 10000 == 0:
+                    elapsed = time.time() - start
+                    print(f"  已处理 {line_no:,} 行 ({elapsed:.1f}s)", file=sys.stderr)
+
+        elif file_ext == '.xml':
+            # XML file parsing
+            if verbose:
+                print(f"📊 解析 XML 文件...", file=sys.stderr)
+            for line_no, rec in enumerate(parse_xml_file(file_path), 1):
+                if rec:
+                    rec["_line_no"] = line_no
+                    records.append(rec)
+                if verbose and line_no % 10000 == 0:
+                    elapsed = time.time() - start
+                    print(f"  已处理 {line_no:,} 行 ({elapsed:.1f}s)", file=sys.stderr)
+
+        elif file_ext == '.pdf':
+            # PDF file parsing
+            if verbose:
+                print(f"📊 解析 PDF 文件...", file=sys.stderr)
+            for line_no, rec in enumerate(parse_pdf_file(file_path), 1):
+                if rec:
+                    rec["_line_no"] = line_no
+                    records.append(rec)
+                if verbose and line_no % 10000 == 0:
+                    elapsed = time.time() - start
+                    print(f"  已处理 {line_no:,} 行 ({elapsed:.1f}s)", file=sys.stderr)
+
+        elif file_ext == '.json':
+            # JSON file parsing
+            if verbose:
+                print(f"📊 解析 JSON 文件...", file=sys.stderr)
+            for line_no, rec in enumerate(parse_json_file(file_path), 1):
+                if rec:
+                    rec["_line_no"] = line_no
+                    records.append(rec)
+                if verbose and line_no % 10000 == 0:
+                    elapsed = time.time() - start
+                    print(f"  已处理 {line_no:,} 行 ({elapsed:.1f}s)", file=sys.stderr)
+
+        else:
+            # Default: parse as text log file
+            if use_stream:
+                # Streaming mode: process chunk by chunk
+                with open(file_path, "r", errors="replace") as f:
+                    buffer = ""
+                    while True:
+                        chunk = f.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        buffer += chunk
+                        lines = buffer.split("\n")
+                        buffer = lines.pop()  # Keep incomplete last line in buffer
+
+                        for line in lines:
+                            if not line.strip():
+                                line_no += 1
+                                continue
+                            line_no += 1
+                            rec = parse_line(line)
+                            if rec:
+                                rec["_line_no"] = line_no
+                                records.append(rec)
+
+                # Process remaining buffer
+                if buffer.strip():
                     line_no += 1
+                    if verbose and line_no % 100000 == 0:
+                        elapsed = time.time() - start
+                        print(f"  已处理 {line_no:,} 行 ({elapsed:.1f}s)", file=sys.stderr)
+                    rec = parse_line(buffer)
+                    if rec:
+                        rec["_line_no"] = line_no
+                        records.append(rec)
+            else:
+                # Small file mode: load all lines at once
+                with open(file_path, "r", errors="replace") as f:
+                    lines = f.readlines()
+                total = len(lines)
+                for i, line in enumerate(lines):
+                    line_no = i + 1
+                    if not line.strip():
+                        continue
                     rec = parse_line(line)
                     if rec:
                         rec["_line_no"] = line_no
                         records.append(rec)
 
-            # Process remaining buffer
-            if buffer.strip():
-                line_no += 1
-                if verbose and line_no % 100000 == 0:
-                    elapsed = time.time() - start
-                    print(f"  已处理 {line_no:,} 行 ({elapsed:.1f}s)", file=sys.stderr)
-                rec = parse_line(buffer)
-                if rec:
-                    rec["_line_no"] = line_no
-                    records.append(rec)
-    else:
-        # Small file mode: load all lines at once
-        with open(file_path, "r", errors="replace") as f:
-            lines = f.readlines()
-        total = len(lines)
-        for i, line in enumerate(lines):
-            line_no = i + 1
-            if not line.strip():
-                continue
-            rec = parse_line(line)
-            if rec:
-                rec["_line_no"] = line_no
-                records.append(rec)
+                    if verbose and line_no % 500000 == 0 and line_no > 0:
+                        elapsed = time.time() - start
+                        pct = min(100, line_no / total * 100)
+                        print(f"  进度: {pct:.0f}% ({line_no:,}/{total:,}, {elapsed:.1f}s)", file=sys.stderr)
 
-            if verbose and line_no % 500000 == 0 and line_no > 0:
-                elapsed = time.time() - start
-                pct = min(100, line_no / total * 100)
-                print(f"  进度: {pct:.0f}% ({line_no:,}/{total:,}, {elapsed:.1f}s)", file=sys.stderr)
+    except ImportError as e:
+        print(f"❌ 缺少必要的库: {e}", file=sys.stderr)
+        print(f"💡 请安装所需依赖: pip install openpyxl PyPDF2", file=sys.stderr)
+        return []
+    except Exception as e:
+        print(f"❌ 解析文件失败: {e}", file=sys.stderr)
+        return []
 
     elapsed = time.time() - start
     if verbose:
