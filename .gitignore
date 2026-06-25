@@ -43,3 +43,16 @@ Thumbs.db
 /tmp/
 *.tmp
 *.bak
+
+# Skill packages (保留 build.sh)
+.trae/skills/packages/*.zip
+.trae/skills/packages/**/*.zip
+
+# Skill reports
+.trae/skills/*/reports/
+
+# Backup directories
+.trae/skills/*/.backup_*/
+
+# Test files (测试数据)
+.trae/skills/test-file/
