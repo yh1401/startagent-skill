@@ -1,0 +1,17 @@
+# Log Analysis Skill Dependencies
+
+# Core dependencies
+pyyaml>=6.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
+requests>=2.31.0
+
+# Optional dependencies
+python-docx>=1.1.0
+
+# PDF generation (optional, requires additional system dependencies)
+# weasyprint>=59.0
+
+# Development dependencies
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
