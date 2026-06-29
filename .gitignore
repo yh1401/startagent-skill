@@ -59,6 +59,5 @@ Thumbs.db
 .trae/skills/test-file/
 
 # MCP Server dependencies (排除依赖，保留源代码)
-mcp-server/references/mock_responses.json
 mcp-server/__pycache__/
 mcp-server/**/*.pyc

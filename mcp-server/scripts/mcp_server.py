@@ -32,6 +32,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger('ops-data-query-mcp')
 
+# Mock 数据开关：MCP_USE_MOCK=true 时启用，默认关闭
+USE_MOCK = os.environ.get('MCP_USE_MOCK', 'false').lower() == 'true'
+if USE_MOCK:
+    logger.warning("Mock 数据模式已启用（API 失败时将使用 Mock 数据）")
+
 try:
     from mcp.server.fastmcp import FastMCP
     HAS_MCP = True
@@ -125,18 +130,36 @@ class CMDBAPIClient:
                 self._session.headers.update(self.config.auth_headers)
             logger.info("创建 HTTP 会话，认证头已配置")
     
+    def _get_mock_response(self, skill_id: str) -> dict:
+        """获取 Mock 响应数据（仅在 USE_MOCK 开启时调用）"""
+        mock_path = os.path.join(_references_dir, 'mock_responses.json')
+        if os.path.exists(mock_path):
+            with open(mock_path, 'r', encoding='utf-8') as f:
+                mock_data = json.load(f)
+                result = mock_data.get(skill_id, {"code": 500, "message": "Mock 数据不存在", "data": {"records": [], "total": 0}})
+                logger.warning(f"使用 Mock 数据: {skill_id}, 记录数={result.get('data', {}).get('total', 0)}")
+                return _normalize_pagination(skill_id, result)
+        logger.error(f"Mock 数据文件不存在: {mock_path}")
+        return {"code": 500, "message": "Mock 数据文件不存在", "data": {"records": [], "total": 0}}
+    
     def _request(self, skill_id: str, params: dict) -> dict:
-        """发送 API 请求，失败时返回错误"""
+        """发送 API 请求，当 USE_MOCK 开启且请求失败时回退到 Mock 数据"""
         endpoint = self.config.endpoints.get(skill_id, {})
         url = endpoint.get('full_url', '')
         method = endpoint.get('method', 'POST').upper()
         
         if not url:
-            error_msg = f"未找到 {skill_id} 的 API 端点配置，请检查 config/api_endpoints.json"
+            if USE_MOCK:
+                logger.warning(f"未找到 {skill_id} 的 API 端点，使用 Mock 数据")
+                return self._get_mock_response(skill_id)
+            error_msg = f"未找到 {skill_id} 的 API 端点配置"
             logger.error(error_msg)
             return {"code": 500, "message": error_msg, "data": {"records": [], "total": 0}}
         
         if not HAS_REQUESTS:
+            if USE_MOCK:
+                logger.warning("requests 模块未安装，使用 Mock 数据")
+                return self._get_mock_response(skill_id)
             error_msg = "requests 模块未安装，请先安装: pip install requests"
             logger.error(error_msg)
             return {"code": 500, "message": error_msg, "data": {"records": [], "total": 0}}
@@ -155,10 +178,16 @@ class CMDBAPIClient:
             logger.debug(f"API 响应成功 ({skill_id}): code={result.get('code')}")
             return _normalize_pagination(skill_id, result)
         except requests.exceptions.RequestException as e:
+            if USE_MOCK:
+                logger.warning(f"API 请求失败 ({skill_id}): {e}，使用 Mock 数据")
+                return self._get_mock_response(skill_id)
             error_msg = f"API 请求失败 ({skill_id}): {str(e)}"
             logger.error(error_msg)
             return {"code": 500, "message": error_msg, "data": {"records": [], "total": 0}}
         except Exception as e:
+            if USE_MOCK:
+                logger.warning(f"API 处理异常 ({skill_id}): {e}，使用 Mock 数据")
+                return self._get_mock_response(skill_id)
             error_msg = f"API 处理异常 ({skill_id}): {str(e)}"
             logger.error(error_msg)
             return {"code": 500, "message": error_msg, "data": {"records": [], "total": 0}}
@@ -440,7 +469,7 @@ if HAS_FASTAPI:
     app = FastAPI(
         title="ops-data-query-mcp",
         description="企业 CMDB 运维数据综合查询服务 - HTTP/MCP 双模式",
-        version="1.0.0"
+        version="1.1.0"
     )
     
     # Pydantic 模型
@@ -522,6 +551,8 @@ if HAS_FASTAPI:
             "status": "healthy",
             "service": "ops-data-query-mcp",
             "version": "1.1.0",
+            "mock_enabled": USE_MOCK,
+            "mock_file_exists": os.path.exists(os.path.join(_references_dir, 'mock_responses.json')),
             "modules": {
                 "mcp": HAS_MCP,
                 "fastapi": HAS_FASTAPI,
@@ -698,8 +729,19 @@ def main():
         default=8000,
         help="HTTP 服务器监听端口 (默认: 8000)"
     )
+    parser.add_argument(
+        "--use-mock",
+        action="store_true",
+        default=False,
+        help="启用 Mock 数据模式（API 失败时使用 Mock 数据）"
+    )
     
     args = parser.parse_args()
+    
+    global USE_MOCK
+    if args.use_mock:
+        USE_MOCK = True
+        logger.warning("Mock 数据模式已启用（通过 --use-mock 参数）")
     
     if args.transport == "mcp":
         run_mcp()
