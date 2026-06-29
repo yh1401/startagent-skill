@@ -44,7 +44,7 @@ try:
     HAS_REQUESTS = True
 except ImportError:
     HAS_REQUESTS = False
-    logger.warning("未安装 requests 模块，将仅使用 Mock 数据")
+    logger.error("未安装 requests 模块，请先安装: pip install requests")
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -126,54 +126,42 @@ class CMDBAPIClient:
             logger.info("创建 HTTP 会话，认证头已配置")
     
     def _request(self, skill_id: str, params: dict) -> dict:
-        """发送 API 请求，失败时返回 Mock 数据"""
+        """发送 API 请求，失败时返回错误"""
         endpoint = self.config.endpoints.get(skill_id, {})
         url = endpoint.get('full_url', '')
         method = endpoint.get('method', 'POST').upper()
         
         if not url:
-            logger.warning(f"未找到 {skill_id} 的 API 端点，使用 Mock 数据")
-            result = self._get_mock_response(skill_id)
-            return _normalize_pagination(skill_id, result)
+            error_msg = f"未找到 {skill_id} 的 API 端点配置，请检查 config/api_endpoints.json"
+            logger.error(error_msg)
+            return {"code": 500, "message": error_msg, "data": {"records": [], "total": 0}}
+        
+        if not HAS_REQUESTS:
+            error_msg = "requests 模块未安装，请先安装: pip install requests"
+            logger.error(error_msg)
+            return {"code": 500, "message": error_msg, "data": {"records": [], "total": 0}}
         
         try:
-            if HAS_REQUESTS:
-                self._ensure_session()
-                logger.debug(f"发送 {method} 请求: {url}, params={params}")
-                resp = self._session.request(
-                    method, url,
-                    json=params,
-                    headers=self.config.auth_headers,
-                    timeout=30
-                )
-                resp.raise_for_status()
-                result = resp.json()
-                logger.debug(f"API 响应成功 ({skill_id}): code={result.get('code')}")
-                return _normalize_pagination(skill_id, result)
-            else:
-                logger.warning("requests 模块未安装，使用 Mock 数据")
-                result = self._get_mock_response(skill_id)
-                return _normalize_pagination(skill_id, result)
+            self._ensure_session()
+            logger.debug(f"发送 {method} 请求: {url}, params={params}")
+            resp = self._session.request(
+                method, url,
+                json=params,
+                headers=self.config.auth_headers,
+                timeout=30
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            logger.debug(f"API 响应成功 ({skill_id}): code={result.get('code')}")
+            return _normalize_pagination(skill_id, result)
         except requests.exceptions.RequestException as e:
-            logger.error(f"API 请求失败 ({skill_id}): {e}")
-            result = self._get_mock_response(skill_id)
-            return _normalize_pagination(skill_id, result)
+            error_msg = f"API 请求失败 ({skill_id}): {str(e)}"
+            logger.error(error_msg)
+            return {"code": 500, "message": error_msg, "data": {"records": [], "total": 0}}
         except Exception as e:
-            logger.error(f"API 处理异常 ({skill_id}): {e}")
-            result = self._get_mock_response(skill_id)
-            return _normalize_pagination(skill_id, result)
-    
-    def _get_mock_response(self, skill_id: str) -> dict:
-        """获取 Mock 响应数据"""
-        mock_path = os.path.join(_references_dir, 'mock_responses.json')
-        if os.path.exists(mock_path):
-            with open(mock_path, 'r', encoding='utf-8') as f:
-                mock_data = json.load(f)
-                result = mock_data.get(skill_id, {"code": 500, "message": "服务不可用", "data": {"records": [], "total": 0}})
-                logger.info(f"使用 Mock 数据: {skill_id}, 记录数={result.get('data', {}).get('total', 0)}")
-                return result
-        logger.error(f"Mock 数据文件不存在: {mock_path}")
-        return {"code": 500, "message": "服务不可用", "data": {"records": [], "total": 0}}
+            error_msg = f"API 处理异常 ({skill_id}): {str(e)}"
+            logger.error(error_msg)
+            return {"code": 500, "message": error_msg, "data": {"records": [], "total": 0}}
     
     def query_server(self, **params) -> dict:
         """查询服务器信息"""
@@ -530,13 +518,10 @@ if HAS_FASTAPI:
     @app.get("/health", tags=["基础"])
     def health():
         """健康检查端点"""
-        mock_path = os.path.join(_references_dir, 'mock_responses.json')
-        mock_exists = os.path.exists(mock_path)
         return {
             "status": "healthy",
             "service": "ops-data-query-mcp",
-            "version": "1.0.0",
-            "mock_data_available": mock_exists,
+            "version": "1.1.0",
             "modules": {
                 "mcp": HAS_MCP,
                 "fastapi": HAS_FASTAPI,
