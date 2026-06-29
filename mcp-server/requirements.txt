@@ -1,0 +1,8 @@
+# HTTP 模式依赖（Python 3.9+）
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.0.0
+requests>=2.31.0
+
+# MCP 模式依赖（Python 3.10+，可选安装）
+# mcp[cli]>=1.2.0
