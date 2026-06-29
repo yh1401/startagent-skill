@@ -1,7 +1,7 @@
 ---
 name: ops-data-query
 description: 企业 CMDB 运维数据综合查询技能。提供服务器查询、公网IP查询、部署记录查询、产品信息查询和工程项目基础信息查询五大功能，支持跨维度关联查询和智能路由。
-version: 3.0.0
+version: 4.0.0
 author: Skill Agent Team
 ---
 
@@ -23,15 +23,14 @@ author: Skill Agent Team
 
 ### 共享资源
 
-| 文件 | 用途 |
-|------|------|
-| `config/param_mappings.json` | 通用参数映射（机房、状态、环境等） |
-| `config/api_endpoints.json` | API 端点统一配置 |
-| `config/field_mappings.json` | 响应字段名统一映射 |
-| `references/output_templates.md` | 标准输出模板（所有子技能共用） |
-| `references/error_scenarios.md` | 统一错误处理方案 |
-| `references/mock_responses.json` | Mock 数据统一源 |
-| `references/param_guides.md` | 参数映射参考文档 |
+| 文件 | 用途 | 归属 |
+|------|------|------|
+| `config/param_mappings.json` | 通用参数映射（机房、状态、环境等） | 子技能 |
+| `references/output_templates.md` | 标准输出模板（所有子技能共用） | 子技能 |
+| `references/error_scenarios.md` | 统一错误处理方案 | 子技能 |
+| `references/param_guides.md` | 参数映射参考文档 | 子技能 |
+
+> ⚠️ **注意**：API 端点配置、Mock 数据、字段映射已迁移至 MCP Server（`mcp-server/` 目录），由 MCP Server 统一管理。
 
 ---
 
@@ -275,10 +274,123 @@ author: Skill Agent Team
 
 ---
 
+## MCP 服务集成
+
+### 架构说明
+
+本技能已改造为 **薄指令层 + MCP 服务** 的分离架构：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     StarAgent 平台                          │
+├─────────────────────────────────────────────────────────────┤
+│  ops-data-query (主技能)                                    │
+│  ├── cmdb-server-query          (薄指令层)                  │
+│  │   - 触发条件、参数映射、输出格式化                         │
+│  ├── server-public-ip-query     (薄指令层)                  │
+│  ├── project-deployment-query   (薄指令层)                  │
+│  ├── product-query              (薄指令层)                  │
+│  └── project-basis-query        (薄指令层)                  │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼ MCP 工具调用
+┌─────────────────────────────────────────────────────────────┐
+│                   MCP Server (独立服务)                      │
+│  位置: mcp-server/scripts/mcp_server.py                     │
+│  ├── cmdb_server_query          (数据获取)                  │
+│  ├── server_public_ip_query     (数据获取)                  │
+│  ├── project_deployment_query   (数据获取)                  │
+│  ├── product_query              (数据获取)                  │
+│  └── project_basis_query        (数据获取)                  │
+│  ├── API 调用 + Mock 降级                                   │
+│  └── 分页字段统一处理                                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 职责划分
+
+| 职责 | 子技能 (薄指令层) | MCP Server |
+|------|------------------|------------|
+| 触发条件识别 | ✅ | ❌ |
+| 参数映射转换 | ✅ | ❌ |
+| 输出格式化 | ✅ | ❌ |
+| API 调用 | ❌ | ✅ |
+| Mock 数据降级 | ❌ | ✅ |
+| 分页字段统一 | ❌ | ✅ |
+| 连接管理 | ❌ | ✅ |
+
+### 服务端配置
+
+**启动命令**：
+
+```bash
+cd mcp-server
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 启动 MCP 服务器 (HTTP 模式，供 StarAgent 注册)
+python3 scripts/mcp_server.py --transport http --port 8000
+
+# 或启动 MCP stdio 模式
+python3 scripts/mcp_server.py --transport mcp
+```
+
+**默认端口**：8000
+
+### 注册的工具列表
+
+| 工具名 | 说明 |
+|--------|------|
+| `cmdb_server_query` | 查询 CMDB 服务器信息 |
+| `server_public_ip_query` | 查询服务器公网 IP |
+| `project_deployment_query` | 查询项目部署记录 |
+| `product_query` | 查询产品信息 |
+| `project_basis_query` | 查询工程项目基础信息 |
+
+### StarAgent 平台配置
+
+在 StarAgent 平台添加 MCP 连接：
+
+```json
+{
+  "name": "ops-data-query",
+  "type": "mcp",
+  "url": "http://localhost:8000",
+  "description": "企业 CMDB 运维数据综合查询"
+}
+```
+
+### 工具调用示例
+
+```json
+{
+  "name": "cmdb_server_query",
+  "parameters": {
+    "ip": "192.168.7.101",
+    "currentPage": 1,
+    "pageSize": 10
+  }
+}
+```
+
+### 特性
+
+- ✅ **自动降级**：API 失败时自动使用 Mock 数据
+- ✅ **连接复用**：使用 requests.Session 保持连接
+- ✅ **标准 Schema**：自动生成工具描述和参数定义
+- ✅ **超时控制**：30秒超时保护
+- ✅ **分页统一**：自动处理不同 API 的分页字段差异
+- ✅ **HTTP/MCP 双模式**：支持 HTTP API 和 MCP stdio 两种模式
+
+---
+
 ## 版本历史
 
 | 版本 | 日期 | 更新内容 |
 |------|------|---------|
+| 4.0 | 2026-06-25 | 改造为薄指令层+MCP Server 分离架构，数据获取迁移至 MCP Server |
+| 3.1 | 2026-06-25 | 新增 MCP 服务支持，提供标准化工具调用接口 |
 | 3.0 | 2026-06-24 | 共享模板抽离，配置统一，跨技能查询能力，反向查询 |
 | 2.0 | 2026-06-18 | 统一字段为英文 key，修复数据模型 |
 | 1.0 | 2026-05-20 | 初始版本 |

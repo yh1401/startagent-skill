@@ -8,6 +8,12 @@ import os
 from typing import Dict, Any, Optional
 
 try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+
+try:
     from docx import Document
     from docx.shared import Pt, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -22,10 +28,22 @@ except ImportError:
     WEASYPRINT_AVAILABLE = False
 
 
+def _load_config() -> dict:
+    """Load configuration from config.yaml."""
+    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+    if YAML_AVAILABLE and os.path.exists(config_path):
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    return {}
+
+
 class ReportGenerator:
     """Multi-format report generator."""
 
-    def __init__(self, output_dir: str = "reports"):
+    def __init__(self, output_dir: str = None):
+        if output_dir is None:
+            config = _load_config()
+            output_dir = config.get('report', {}).get('output_dir', './output')
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
 
